@@ -1,0 +1,626 @@
+---
+title: "Semester project - Wild boar scare-off measures"
+subtitle: Computational Movement Analysis - Patterns and Trends in Environmental Data 
+
+author: "Katjusa Mezek & Pia Vozelj, Zurich University of Applied Sciences, Master studies in Environment and Natural Resources"
+
+output:
+  rmarkdown::html_document:
+    theme: paper
+---
+# 1 Background and Research goals
+
+Recently there has been an increase in the population of wild boar in large parts of Europe, including in Switzerland (Massei, 2015). With rising number of wild boar, there is a direct correlation to damage in agriculture, which results in financial losses. For Switzerland, the amount comes down to several million Swiss Francs annually. In response to that, there have been measures taken to repel the wild boar and protect the agricultural good. There are different prevention methods, most frequently used are electric fences and damming shootings (Suter, 2010). Since both are time-consuming, expensive and due to conservation and hunting ban, they aren´t always possible. Consequently, there was a need to adapt to those changes and find a new deterrence method that met the criteria. An environmentally friendly and money and time saving method is the acoustic method. The idea behind it is, that speakers are placed in fields that need protection and once wild boar come close to them, the speaker emits a sound that scares off the animals. Wild boar are also known to be adaptable and quick learners, therefore it is expected that they can learn to stay out of the fields (Suter, 2018).
+
+This study was conducted in order to identify and measure the effects of speaker scare-off measures on wild boar in the Fanel region of Bern, Switzerland. Using data provided by GPS trackers, wild boar paths and journeys were analyzed before and after the start of speaker scare-off measures. 
+
+The following two research questions have been proposed:
+
+**1.) Can the effect of the scare-off measures on the wild boar movement be seen by visualizing the trajectories before and after the start of the speaker scare-off measures? **
+Trajectories will be plotted using line plots and heat maps. It is expected that line plots are more effective at visualizing the effect of the scare-off methods, in comparison to the heat maps.
+
+**2.) Can the effects of the scare-off measures on the wild boar movement and behavior be identified by using the following three methods:**
+
+**- method 1:** Analyzing the distance between the wild boar and speaker locations before and after the start of the scare-off measures
+
+**- method 2:** Quantifying the percentage of wild boar in forests before and after the start of the scare-off measures using a vegetation index
+
+**- method 3:** Quantifying the percentage of wild boar in forests and fields before and after the start of the scare-off measures using crop raster data
+
+All three methods mentioned above are expected to be suitable for observing and identifying the effects of the scare-off measures.
+
+# 2 Data 
+## 2.1 Dataset
+
+The Dataset was provided within the course Patterns & Trends in Environmental Data. The compact file “Wildschwein Schrek”, was downloaded using the following code: 
+
+```{r echo=T, results='hide',warning = FALSE, message = FALSE, eval=FALSE}
+
+devtools::install_github("ComputationalMovementAnalysis/ComputationalMovementAnalysisData")
+
+```
+
+It includes information regarding the movement of the wild boar in correlation to the speakers. 
+For the second reaserch question, we additionally used the datasets “Feldaufnahmen_Fanel.gpkg” and “vegetationshoehe_LFI.tif”, provided to us within the course Patterns & Trends in Environmental data - Exercise 5. The Feldaufnahmen_Fanel contains information on the crops grown in the Fanel area and vegetationshoehe_LFI provides a vegetation index - high resolution information (1x1 Meter) on the vegetation height, which is determined from the difference between the digital surface models DSM and the digital terrain model by swisstopo (swissAlti3D). 
+
+The following dimensions of movement representation used in the scope of this project can be seen in Table 1.
+
+*Table 1: The dimensions of the wild boar movement*
+
+```{r echo=F}
+knitr::include_graphics("Table_1.jpg")
+```
+
+## 2.2 Packages, data tidying and preparation
+
+First, the needed packages and data were loaded.  
+
+```{r echo=T, results='hide',warning = FALSE, message = FALSE}
+## Libraries
+library(ComputationalMovementAnalysisData)
+library(readr)        
+library(dplyr)        
+library(ggplot2)      
+library(sf)           
+library(terra)       
+library(tmap)         
+library(mapproj)
+library(rgdal)
+library(lubridate)
+library(sp)
+library(leaflet)
+library(sfheaders)
+library(tidyverse)
+library(leaflet.extras)
+library(ggpubr)
+
+## Data import
+wildschwein = wildschwein_BE
+schreck_agenda = schreck_agenda
+schreck_loc =schreck_locations
+```
+
+The wild boar (Wildschwein) and speaker (schreck) datasets were converted to sf objects. Both datasets were tidied to include both Cartesian coordinates (X,Y) and decimal degree (lat, lon) coordinates. In this stage the wild boar trajectories were annotated with the vegetation index and crop raster data.
+
+```{r echo=T, results='hide',warning = FALSE, message = FALSE}
+## key join the schreck datased (key = ID)
+schreck_all =left_join(schreck_agenda,schreck_locations, by="id")
+
+## Convert decimal degrees E,N to Cartesian coordinates X,Y & rename columns
+# Schreck dataset
+schreck_all_sf = st_as_sf(schreck_all, coords=c("lon","lat"), crs=4326, remove=FALSE)
+schreck_all_ch = st_transform(schreck_all_sf, 2056)
+transformed = sf::st_coordinates(schreck_all_ch,geometry)
+
+schreck_all_ch = schreck_all_ch %>% cbind(transformed)%>% 
+  dplyr::rename (speaker_X =X ,speaker_Y=Y, speaker_lat = lat, speaker_lon = lon) 
+
+# Wildschwein dataset
+# Annotate the wildboar data with the vegetation index and crop data
+veg_height <- rast("vegetationshoehe_LFI.tif")
+crop_fanel <- read_sf("Feldaufnahmen_Fanel.gpkg")
+
+wildschwein_sf = st_as_sf(wildschwein, coords=c("E","N"), crs=2056, remove=FALSE)
+wildschwein_sf = st_join(wildschwein_sf,crop_fanel)
+veg_height_df <- terra::extract(veg_height,st_coordinates(wildschwein_sf))
+wildschwein_sf <- cbind(wildschwein_sf,veg_height_df)
+wildschwein_sf = st_transform(wildschwein_sf, 4326)
+transformed = sf::st_coordinates(wildschwein_sf,geometry)
+
+wildschwein = wildschwein_sf %>% cbind(transformed)%>% 
+  dplyr::rename(wildschwein_lat = Y, wildschwein_lon=X, wildschwein_X=E, wildschwein_Y=N) 
+```
+
+## 2.3 Data exploration
+
+Due to the large size of the datasets, specific locations of the scare-off measures had to be identified before analysis. The wild boar and speaker times and locations were visualized and identified in order to help with the data pre-processing phase.
+
+```{r echo=F,figures-side, fig.show="hold", out.width="50%"}
+## Wild boar tracking times
+wildschwein %>%
+  ggplot(aes(DatetimeUTC, TierName)) + geom_line()
+
+## Speaker start times
+schreck_all %>%
+  ggplot(aes(datum_on, id)) + geom_point()
+```
+*Figure 1: Wild boar tracking times (left) and speaker start times (right)*
+
+The years 2014 and 2017 were excluded from analysis, since the wild boar and speaker times were incompatible. Based on the visualizations in Figure 2, some speakers were identified as redundant.
+
+```{r echo=F,fig.show="hold", out.width="50%"}
+## A look into the wild boar and speaker positions
+# Year 2015
+wildschwein_2015 = wildschwein %>% 
+  mutate(
+    DatetimeUTC_posix = as.POSIXct(DatetimeUTC, format = "%Y-%m-%d %H:%M:%S",tz="UTC")) %>%
+  filter(DatetimeUTC_posix >= "2015-01-01" & DatetimeUTC_posix <= "2015-12-31")
+
+schreck_all_ch_2015 = schreck_all_ch %>% 
+  mutate(
+    DatetimeUTC_posix = as.POSIXct(datum_on, format = "%Y-%m-%d",tz="UTC")) %>%
+  filter(datum_on >= "2015-01-01" & datum_on <= "2015-12-31")
+
+ggplot() +
+  geom_point(wildschwein_2015, mapping=aes(wildschwein_X,wildschwein_Y)) +
+  theme(legend.position = "none") +
+  geom_point(schreck_all_ch_2015, mapping=aes(speaker_X,speaker_Y,col="red"))+
+  theme_bw() +
+  labs(x="E", y="N", title = "Positions of the wild boar and speakers in the year 2015")
+
+# Year 2016
+wildschwein_2016 = wildschwein %>% 
+  mutate(
+    DatetimeUTC_posix = as.POSIXct(DatetimeUTC, format = "%Y-%m-%d %H:%M:%S",tz="UTC")) %>%
+  filter(DatetimeUTC_posix >= "2016-01-01" & DatetimeUTC_posix <= "2016-12-31")
+
+schreck_all_ch_2016 = schreck_all_ch %>% 
+  mutate(
+    DatetimeUTC_posix = as.POSIXct(datum_on, format = "%Y-%m-%d",tz="UTC")) %>%
+  filter(datum_on >= "2016-01-01" & datum_on <= "2016-12-31")
+
+ggplot() +
+  geom_point(wildschwein_2016, mapping=aes(wildschwein_X,wildschwein_Y)) +
+  theme(legend.position = "none") +
+  geom_point(schreck_all_ch_2016, mapping=aes(speaker_X,speaker_Y,col=""))+
+  theme_bw() +
+  labs(x="E", y="N", title = "Positions of the wild boar and speakers in the year 2016")
+```
+
+*Figure 2: Wild boar and speaker positions for the year 2015 (left) and 2016 (right)*
+
+# 3 Data pre-processing
+The speakers were filtered based on the maximum X and Y coordinates of the wild boar positions. This way, only the speakers within the wild boar movement areas were selected. Additionally, “Schreck_ID” was added to the dataset, which assigned each speaker its own ID number. The ID numbers were assigned because the "id" column did not have a separate id for each speaker. 
+
+```{r echo=F, fig.show="hold", out.width="50%"}
+schreck_2015_filtered = schreck_all_ch_2015 %>%
+  filter(speaker_X <= max(wildschwein_2015$wildschwein_X), speaker_Y <= max(wildschwein_2015$wildschwein_Y)) 
+
+schreck_2015_filtered$schreck_id = seq.int(nrow(schreck_2015_filtered))
+ 
+
+ggplot() + geom_point(wildschwein_2015, mapping=aes(wildschwein_X,wildschwein_Y)) +
+  theme(legend.position = "bottom") + geom_point(schreck_2015_filtered,size=3, mapping=aes(speaker_X,speaker_Y,col=as.factor(id))) +
+  labs(col="Speaker ID") + theme_bw() +
+  labs(x="E", y="N", title = "Positions of the wild boar and filtered speakers in the year 2015")
+
+# Year 2016
+schreck_2016_filtered = schreck_all_ch_2016 %>%
+  filter(speaker_X <= max(wildschwein_2016$wildschwein_X), speaker_Y <= max(wildschwein_2016$wildschwein_Y)) 
+    
+schreck_2016_filtered$schreck_id = seq.int(nrow(schreck_2016_filtered))
+
+
+ggplot() + geom_point(wildschwein_2016, mapping=aes(wildschwein_X,wildschwein_Y)) +
+  theme(legend.position = "bottom") +
+  geom_point(schreck_2016_filtered, size=3, mapping=aes(speaker_X,speaker_Y,col=as.factor(id))) +
+  labs(col="Speaker ID") + theme_bw() +
+  labs(x="E", y="N", title = "Positions of the wild boar and filtered speakers in the year 2016")
+```
+
+*Figure 3: Filtered speaker positions for the year 2015 (left) and 2016 (right)*
+
+Based on Figure 3 and the amount of wild boar within hearing distance of the speakers (calculated below), speaker WSS_2015_01, standard (loc 1) and WSS_2016_01, standard (loc 2) were chosen for further analyses. The properties of these two speakers can be seen in Table 2.
+
+*Table 2: Summary of the speakers chosen for analysis*
+
+```{r echo=F}
+knitr::include_graphics("Table_2.png")
+```
+
+The wild boar tracking times were rounded to 15 minutes.Afterwards, the following 3 time windows were made for each speaker: 
+
+- 7 days before the activation of the speaker
+
+- the day the speaker was activated
+
+- 7 days after the activation of the speaker
+
+After that, the wild boar and speaker data sets were jointed with the schreck_id key.
+
+```{r echo=T, results='hide',warning = FALSE, message = FALSE}
+## round the wild boar times to 15 minutes
+# Year 2015
+wildschwein_2015 = wildschwein_2015 %>%
+  mutate(
+    Datetimeround= lubridate::round_date(DatetimeUTC_posix,"15 minutes")
+  )
+# Year 2016
+wildschwein_2016 = wildschwein_2016 %>%
+  mutate(Datetimeround= lubridate::round_date(DatetimeUTC_posix,"15 minutes")
+  )
+    
+## Make time windows (7 days before the start date of the speaker, the day the speaker starts and 7 days after the speaker starts)
+# Speaker 1 (WSS_2015_01,standard, schreck_id = 1, start date = 2015-05-20) 
+wildschwein_2015_loc1 = wildschwein_2015 %>%
+  mutate(
+    TimeWindow = ifelse(Datetimeround >= "2015-05-13 00:00:00" & Datetimeround < "2015-05-20 00:00:00","1w before", 
+                        ifelse(Datetimeround >= "2015-05-20 00:00:00" & Datetimeround <= "2015-05-20 23:59:59" , "start",
+                               ifelse(Datetimeround > "2015-05-20 23:59:59" & Datetimeround <= "2015-05-27 23:59:59", "1w after","other"))),
+    schreck_id = rep(1)    #an additional column schreck_id was made, in order to key-join the wildschwein dataset with the schreck dataset
+  ) %>%
+  filter(TimeWindow != "other")    
+
+# Speaker 2 (WSS_2016_01, standard, schreck_id = 1, start date = 2016-04-04)
+wildschwein_2016_loc2 = wildschwein_2016 %>%
+  mutate(
+    TimeWindow = ifelse(Datetimeround >= "2016-03-28 00:00:00" & Datetimeround < "2016-04-04 00:00:00","1w before", 
+                        ifelse(Datetimeround >= "2016-04-04 00:00:00" & Datetimeround <= "2016-04-04 23:59:59" , "start",
+                               ifelse(Datetimeround > "2016-04-04 23:59:59" & Datetimeround <= "2016-04-11 23:59:59", "1w after","other"))),
+    schreck_id = rep(1)
+  ) %>%
+  filter(TimeWindow != "other") 
+
+## join the wildschwein and schreck datasets (key= schreck_id)
+wildschwein_2015_loc1_join = left_join(as.data.frame(wildschwein_2015_loc1), as.data.frame(schreck_2015_filtered), by= "schreck_id")
+wildschwein_2016_loc2_join = left_join(as.data.frame(wildschwein_2016_loc2),as.data.frame(schreck_2016_filtered), by= "schreck_id")
+
+```
+
+The Euclidean distance between the wild boar locations and the speaker locations was calculated, and wild boar within 500m of the speakers  during the start of the measure were identified. The animals identified were Caroline, Claude and Olga for location speaker 1 and Caroline, Miriam and Frida for speaker number 2. 
+
+```{r echo=T,warning = FALSE, message = FALSE}
+## Calculate euclidean distance between the wildschwein locations and the speaker location
+## Find wild boar that were within 500m of the speaker at the start
+# Function for euclidean distance
+euc.dist = function(x1,y1,x2,y2) {
+  (sqrt((lead(x2)-x1)^2+(lead(y2)-y1)^2))
+}
+
+# speaker 1
+wildschwein_2015_loc1_join %>%
+  mutate(
+    distance = euc.dist(wildschwein_X,wildschwein_Y,speaker_X,speaker_Y),
+    TierName = as.factor(TierName)
+  ) %>%
+  filter(TimeWindow == "start") %>%
+  filter(distance <= 500) %>%
+  .$TierName %>% unique()
+
+# speaker 2
+wildschwein_2016_loc2_join %>%
+  mutate(
+    distance = euc.dist(wildschwein_X,wildschwein_Y,speaker_X,speaker_Y),
+    TierName = as.factor(TierName)
+  ) %>%
+  filter(TimeWindow == "start") %>%
+  filter(distance <= 500) %>%
+  .$TierName %>% unique()
+```
+
+# 4 Results and discussion
+# 4.1 Data visualization
+
+As previously mentioned, line plots and heat maps were used to plot the wild boar trajectories. In both cases, granularity of the trajectories were reduced to every 4 rows, using “slice().” This was done to make the plots easier to interpret and to remove any static points.
+
+```{r echo=F}
+## Line plots of the wildboar trajectories
+# loc 1
+wildschwein_2015_loc1_join %>%
+  slice(seq(1,nrow(.),4))%>%
+  mutate(
+    fTierName= as.factor(TierName),
+    fTimeWindow = as.factor(TimeWindow))%>%
+  filter(fTierName %in% c("Caroline", "Claude", "Olga")) %>%
+  ggplot(aes(x=wildschwein_X, y=wildschwein_Y, col=TimeWindow)) + geom_path() + geom_point()  + 
+  geom_point(mapping=aes(speaker_X,speaker_Y, fill="id"), shape = 17, col="black", size =3)+
+  labs(color ="Time windows", fill ="Speaker") + 
+  scale_fill_discrete(labels= "WSS_2015_01") + 
+  scale_color_discrete(limits= c("1w before", "start", "1w after"))+
+  facet_grid(~fTierName) + theme_bw() +
+  labs(x="E", y="N", title = "Wild boar trajectories for the speaker WSS_2015_01") 
+```
+
+*Figure 4: Trajectory plots of the wild boar durring different time windows of the speaker WSS_2015_01*
+
+```{r echo=F}
+# loc 2
+wildschwein_2016_loc2_join %>%
+  slice(seq(1,nrow(.),4))%>%
+  mutate(
+    fTierName= as.factor(TierName),
+    fTimeWindow = as.factor(TimeWindow))%>%
+  filter(fTierName %in% c("Caroline", "Miriam", "Frida")) %>%
+  ggplot(aes(x=wildschwein_X, y=wildschwein_Y, col=TimeWindow)) + geom_path() + geom_point()  + 
+  geom_point(mapping=aes(speaker_X,speaker_Y, fill="id"), shape = 17, col="black", size =3)+
+  labs(color ="Time windows", fill ="Speaker") + 
+  scale_fill_discrete(labels= "WSS_2016_01") + 
+  scale_color_discrete(limits= c("1w before", "start", "1w after"))+
+  facet_grid(~fTierName) + theme_bw() +
+  labs(x="E", y="N", title = "Wild boar trajectories for the speaker WSS_2016_01")
+```
+
+*Figure 4: Trajectory plots of the wild boar durring different time windows of the speaker WSS_2016_01*
+
+The trajectory plots indicate, that the wild boar move away from the speakers after its activation. However, after a week has passed most of the wild boar (with the exception of Caroline and Frida in Figure 4) return near to the location of the speaker.
+
+The heat maps in Figure 5 on the other hand, show a lower density after one week, which indicates that the wild boar visited the fields with the activated speakers less often.
+
+```{r echo=F, fig.show="hold", out.width="50%"}
+## Heat maps
+## loc 1
+df1=wildschwein_2015_loc1_join %>%
+  slice(seq(1,nrow(.),4))%>%
+  mutate(
+    fTierName= as.factor(TierName),
+    fTimeWindow = as.factor(TimeWindow)) %>%
+  filter(fTierName %in% c("Caroline", "Claude", "Olga"))
+
+groups = as.character(unique(df1$TimeWindow))
+
+leaflet() %>%
+  addTiles(group="map") %>%
+  addHeatmap(data=df1[df1$TimeWindow=="1w before",], group = "1w before", lng=~wildschwein_lon, lat=~wildschwein_lat, max=1, blur = 60)%>%
+  addHeatmap(data=df1[df1$TimeWindow=="start",],group = "start", lng=~wildschwein_lon, lat=~wildschwein_lat, max=2, blur = 20)%>%
+  addHeatmap(data=df1[df1$TimeWindow=="1w after",],group = "1w after", lng=~wildschwein_lon, lat=~wildschwein_lat, max=3, blur = 45)%>%
+  addLayersControl(overlayGroups = groups, options = layersControlOptions(collapsed = FALSE))%>%
+  addMarkers(data=schreck_2015_filtered[schreck_2015_filtered$schreck_id==1,], ~speaker_lon, ~speaker_lat, popup = ~as.character(1), label = "WSS_2015_01")%>%
+  setView(7.055569, 46.99734, zoom=16)
+
+# loc 2
+df2 = wildschwein_2016_loc2_join %>%
+  slice(seq(1,nrow(.),4))%>%
+  mutate(
+    fTierName= as.factor(TierName),
+    fTimeWindow = as.factor(TimeWindow)) %>%
+  filter(fTierName %in% c("Caroline", "Miriam", "Frida"))
+
+leaflet() %>%
+  addTiles(group="map") %>%
+  addHeatmap(data=df2[df2$TimeWindow=="1w before",], group = "1w before", lng=~wildschwein_lon, lat=~wildschwein_lat, max=1, blur = 60)%>%
+  addHeatmap(data=df2[df2$TimeWindow=="start",],group = "start", lng=~wildschwein_lon, lat=~wildschwein_lat, max=2, blur = 20)%>%
+  addHeatmap(data=df2[df2$TimeWindow=="1w after",],group = "1w after", lng=~wildschwein_lon, lat=~wildschwein_lat, max=3, blur = 45)%>%
+  addLayersControl(overlayGroups = groups, options = layersControlOptions(collapsed = FALSE))%>%
+  addMarkers(data=schreck_2016_filtered[schreck_2016_filtered$schreck_id==1,], ~speaker_lon, ~speaker_lat, popup = ~as.character(1), label = "WSS_2016_01")%>%
+  setView(7.053519, 46.97996, zoom=18)
+```
+
+*Figure 5: Heat maps of the wild boar during different time windows of the speaker WSS_2015_01 (top) and WSS_2016_01 (bottom)*
+
+## 4.2 Data analysis
+
+Three methods were tested in order to determine the effects of the speaker scare off on measure on the wild boar movement and behavior. 
+
+### 4.2.1 Method 1: Analyzing the distance between the wild boar and speaker locations before and after the start of the scare-off measures
+
+The euclidean distance of the wild boar from the speakers was compared between the different time windows. The data was not normally distributed, based on the qqplots and Shapiro-Wilk test. Therefore  Kruskal-Wallis with Wilcoxon`s rank sum post hoc test
+was used to determine if there are significant differences in the euclidean distances between the different time-windows.
+
+```{r, include=FALSE,warning = FALSE, message = FALSE}
+## Check normality
+# loc 1
+# normality test
+loc1_norm=wildschwein_2015_loc1_join %>%
+    mutate(
+    distance = euc.dist(wildschwein_X,wildschwein_Y,speaker_X,speaker_Y),
+    fTierName= as.factor(TierName),
+    fTimeWindow = as.factor(TimeWindow)) %>%
+  filter(fTierName %in% c("Caroline", "Claude", "Olga")) 
+
+ggqqplot(loc1_norm$distance)
+shapiro.test(loc1_norm$distance) 
+
+# loc 2
+loc2_norm=wildschwein_2016_loc2_join %>%
+  mutate(
+    distance = euc.dist(wildschwein_X,wildschwein_Y,speaker_X,speaker_Y),
+    fTierName= as.factor(TierName),
+    fTimeWindow = as.factor(TimeWindow)) %>%
+  filter(fTierName %in% c("Caroline", "Miriam", "Frida")) 
+
+ggqqplot(loc2_norm$distance)
+shapiro.test(loc2_norm$distance) 
+```
+
+indicates that the wild boar visited the fields with the activated speakers less often.
+
+```{r echo=F, fig.show="hold", out.width="50%", warning = FALSE, message = FALSE}
+## loc 1
+# Kruskal-Wallis with Wilcoxon`s rank sum post hoc test
+my_comparisons <- list(c("1w after", "start"), c("1w before", "start"),c("1w after", "1w before") )
+
+wildschwein_2015_loc1_join %>%
+  mutate(
+    distance = euc.dist(wildschwein_X,wildschwein_Y,speaker_X,speaker_Y),
+    fTierName= as.factor(TierName),
+    fTimeWindow = factor(TimeWindow, levels = c("1w before", "start", "1w after"))) %>%
+  filter(fTierName %in% c("Caroline", "Claude", "Olga")) %>%
+  ggboxplot("fTimeWindow", "distance", color="fTimeWindow", palette="jco")+
+  stat_compare_means(label.x = 1.5, label.y = 2000) +
+  stat_compare_means(comparisons = my_comparisons) + theme_bw() +
+  labs(x="Time windows", y="Distance", color="Time window", title = "Distance between the wild boar and speaker WSS_2015_01")
+
+
+# loc 2
+# Kruskal-Wallis with Wilcoxon`s rank sum post hoc test
+wildschwein_2016_loc2_join %>%
+  mutate(
+    distance = euc.dist(wildschwein_X,wildschwein_Y,speaker_X,speaker_Y),
+    fTierName= as.factor(TierName),
+    fTimeWindow = factor(TimeWindow, levels = c("1w before", "start", "1w after"))) %>%
+  filter(fTierName %in% c("Caroline", "Miriam", "Frida")) %>%
+  ggboxplot("fTimeWindow", "distance", color="fTimeWindow", palette="jco")+
+  stat_compare_means(label.x = 1.5, label.y = 2000) +
+  stat_compare_means(comparisons = my_comparisons) + theme_bw() +
+  labs(x="Time windows", y="Distance", color="Time window", title = "Distance between the wild boar and speaker WSS_2016_01")
+```
+*Figure 6: Box plots of the euclidean distance between the wild boar and the speaker WSS_2015_01 (left) and WSS_2016_01 (right). Significant differences were determined by using  Kruskal-Wallis with Wilcoxon`s rank sum post hoc test (p<0.05).*
+
+In the first location, the distance after 1 week of the start of the speaker is significantly higher than the distance 1 week before or at the start of the speaker activation. This could indicate that the wild boar moved further away after getting scared by the speakers. In the second location, the results show us almost no difference before and after activation of the speakers, indicating less success than in the first location. Despite this, the Kruskal-Wallis with Wilcoxon`s rank sum post hoc test show significant differences, which could be due to the large number of outliers in the data.
+
+### 4.2.2 Method 2: Quantifying the percentage of wild boar in forests before and after the start of the scare-off measures using a vegetation index
+
+The wild boar was annotated with a vegetation height index raster data. The data “vegetationindex” was prepared for us in the course module, which is provided by the Swiss National Forest Inventory (NFI). This dataset contains high resolution information (1x1 m) on the vegetation height, which is determined from the difference between the digital surface models DSM and the digital terrain model by swisstopo (swissAlti3D). It is expected, that the vegetation index gets higher after the start of speaker activation, because the wild boar would hide in the forests (higher vegetation index) and spend less time in the fields.
+
+```{r echo=F, fig.show="hold",warning = FALSE, message = FALSE, strip.white=TRUE}
+## The vegetation index
+tm_shape(veg_height) + 
+  tm_raster(palette = "cividis",style = "cont", legend.is.portrait = FALSE) +
+  tm_layout(legend.outside = TRUE,legend.outside.position = "bottom", frame = FALSE)
+```
+
+*Figure 7: The vegetation index in the Fannel area*
+
+
+
+```{r echo=F, fig.show="hold", out.width="50%"}
+## loc 1 - plot
+wildschwein_2015_loc1_join %>%
+  mutate(
+    distance = euc.dist(wildschwein_X,wildschwein_Y,speaker_X,speaker_Y),
+    fTierName= as.factor(TierName),
+    fTimeWindow = factor(TimeWindow, levels = c("1w before", "start", "1w after"))) %>%
+  filter(fTierName %in% c("Caroline", "Claude", "Olga")) %>%
+  ggboxplot("fTimeWindow", "vegetationshoehe_LFI", color="fTimeWindow", palette="jco")+
+  stat_compare_means(label.x = 1.5, label.y = 35) +
+  stat_compare_means(comparisons = my_comparisons) + theme_bw() +
+  labs(x="Time windows", y="Vegetation index LFI", color="Time window", title = "The vegetation index of the wild boar trajectories for the speaker WSS_2015_01")
+
+## loc 2 - plot
+wildschwein_2016_loc2_join %>%
+  mutate(
+    distance = euc.dist(wildschwein_X,wildschwein_Y,speaker_X,speaker_Y),
+    fTierName= as.factor(TierName),
+    fTimeWindow = factor(TimeWindow, levels = c("1w before", "start", "1w after"))) %>%
+  filter(fTierName %in% c("Caroline", "Miriam", "Frida")) %>%
+  ggboxplot("fTimeWindow", "vegetationshoehe_LFI", color="fTimeWindow", palette="jco")+
+  stat_compare_means(label.x = 1.5, label.y = 50) +
+  stat_compare_means(comparisons = my_comparisons) + theme_bw() +
+  labs(x="Time windows", y="Vegetation index LFI", color="Time window", title = "The vegetation index of the wild boar trajectories for the speaker WSS_2016_01")
+```
+
+*Figure 8: The vegetation index of the wild boar trajectories during the different time windows of speaker WSS_2015_01 (left) and WSS_2016_01 (right)*
+
+The vegetation index seems to get lower 1 week after the speakers are turned on. This is not in line with our expectations, that the index will get higher. The explanation for this could be that the method is not optimal for this location, since the marshy areas show a similar vegetation index as the fields, making the interpretation purely by the vegetation index difficult.
+
+### 4.2.3 Method 3: Quantifying the percentage of wild boar in forests and fields before and after the start of the scare-off measures using crop raster data
+
+The wild boar was annotated with the crop raster data. The data “Feldaufnahmen_Fanel” was used for this method. It is expected that the wild boar will visit the fields with the speakers less often after their activation and spend more time in forests and marshes.
+
+```{r echo=F, fig.show="hold", out.width="50%"}
+# loc 1 - plot 1
+wildschwein_2015_loc1_join %>%
+  mutate(
+    Frucht = ifelse(is.na(Frucht),"other",Frucht),
+    fTierName= as.factor(TierName),
+    fTimeWindow = factor(TimeWindow, levels = c("1w before", "start", "1w after"))) %>%
+  filter(fTierName %in% c("Caroline", "Claude", "Olga")) %>%
+  group_by(fTimeWindow,Frucht, fTierName) %>%
+  count() %>%
+  ungroup() %>%
+  group_by(fTierName, fTimeWindow) %>%
+  mutate(perc = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(
+    Frucht = fct_reorder(Frucht, n,sum, desc = TRUE)
+  ) %>%
+  ggplot(aes(fTimeWindow, perc, fill=Frucht)) + geom_col() + 
+  scale_y_continuous(name = "Percentage", labels = scales::percent_format()) +
+  scale_x_discrete(name = "Time windows") +
+  facet_wrap(~fTierName) +
+  theme_light() +
+  labs(title = "Percentages of visited crops for speaker WSS_2015_01")
+
+# loc 1 - plot 2
+wildschwein_2015_loc1_join %>%
+    mutate(
+    Frucht = ifelse(is.na(Frucht),"other",Frucht),
+    fTierName= as.factor(TierName),
+    fTimeWindow = factor(TimeWindow, levels = c("1w before", "start", "1w after"))) %>%
+  filter(fTierName %in% c("Caroline", "Claude", "Olga")) %>%
+  group_by(fTimeWindow,Frucht, fTierName) %>%
+  count() %>%
+  ungroup() %>%
+  group_by(fTierName, fTimeWindow) %>%
+  mutate(perc = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(
+    Frucht = fct_reorder(Frucht, n,sum, desc = TRUE)
+  ) %>%
+  ggplot(aes(fTimeWindow, n, fill=Frucht)) + geom_col() + 
+  scale_y_continuous(name = "Number of visits") +
+  scale_x_discrete(name = "Time windows") +
+  facet_grid(~Frucht)  +
+  theme_light() +
+  labs(title = "Number of visits per area for speaker WSS_2015_01")
+```
+
+*Figure 9: The percentage (left) and number (right) of visits per cultivation during different time windows for speaker WSS_2015_01*
+
+```{r echo=F, fig.show="hold", out.width="50%"}
+# loc 2 - plot 1
+wildschwein_2016_loc2_join %>%
+  mutate(
+    Frucht = ifelse(is.na(Frucht),"other",Frucht),
+    fTierName= as.factor(TierName),
+    fTimeWindow = factor(TimeWindow, levels = c("1w before", "start", "1w after"))) %>%
+  filter(fTierName %in% c("Caroline", "Miriam", "Frida")) %>%
+  group_by(fTimeWindow,Frucht, fTierName) %>%
+  count() %>%
+  ungroup() %>%
+  group_by(fTierName, fTimeWindow) %>%
+  mutate(perc = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(
+    Frucht = fct_reorder(Frucht, n,sum, desc = TRUE)
+  ) %>%
+  ggplot(aes(fTimeWindow, perc, fill=Frucht)) + geom_col() + 
+  scale_y_continuous(name = "Percentage", labels = scales::percent_format()) +
+  scale_x_discrete(name = "Time windows") +
+  facet_wrap(~fTierName) +
+  theme_light() +
+  labs(title = "Percentages of visited crops for speaker WSS_2016_01")
+
+# loc 2 - plot 2
+wildschwein_2016_loc2_join %>%
+  mutate(
+    Frucht = ifelse(is.na(Frucht),"other",Frucht),
+    fTierName= as.factor(TierName),
+    fTimeWindow = factor(TimeWindow, levels = c("1w before", "start", "1w after"))) %>%
+  filter(fTierName %in% c("Caroline", "Miriam", "Frida")) %>%
+  group_by(fTimeWindow,Frucht, fTierName) %>%
+  count() %>%
+  ungroup() %>%
+  group_by(fTierName, fTimeWindow) %>%
+  mutate(perc = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(
+    Frucht = fct_reorder(Frucht, n,sum, desc = TRUE)
+  ) %>%
+  ggplot(aes(fTimeWindow, n, fill=Frucht)) + geom_col() + 
+  scale_y_continuous(name = "Number of visits") +
+  scale_x_discrete(name = "Time windows") +
+  facet_grid(~Frucht)  +
+  theme_light() +
+  labs(title = "Percentages of visited crops for speaker WSS_2016_01")
+```
+
+*Figure 10: The percentage (left) and number (right) of visits per cultivation durring different time windows for speaker WSS_2016_01*
+
+The visited cultivations during different time windows change in both locations for all of the observed animals, but not necessarily for the better. In the first speaker location, where wheat is grown, the wild boar tend to spend less time in the woods than before. Two of the subjects appear in meadows more than before. During the day the speaker is started, the wild boar stick more to pastures and fields with beans. 
+In the second speaker location, in the meadows, the results vary from one wild boar to another. For two, their visits to the meadows lower. One of them stays in the forests more, the other in Chinese reed, pastures and pea fields. The third wild boar doesn’t change its path in the meadows at all, however its stay in the forests increases. 
+
+Overall, the scare-off measures prove to be effective in protecting the fields in which the speaker is located. Because the wild boar consequentially move to other surrounding fields, the speakers should be positioned in other fields as well. 
+
+# 5 Conclusions
+
+Line plots and heat maps have proven to be sufficient visualization techniques. Line plots were better at visualizing the individual wild boar reactions to the scare off measures, while heat maps were better at showing the overall effect of the scare off measures on the wild boar movement.Their results show, that the scare-off measure work for some wild boar since they no longer return in as big numbers as before. 
+
+The first method, which compares the distances of the wild boar to the speakers between different time windows, shows us that the wild boar tend to travel further from the speakers after they are started, indicating that the scare-off measures might be effective in keeping the wild boar off the affected fields. The second method which quantifies the percentage of the wild boar in the forest using a vegetation index was ineffective in this case and it does not give us accurate information, because the marshy areas and fields showed a similar vegetation index.The last method was fairly similar to the second method, but it included field crop information. It showed that the wild boar spend less time on the effected fields, but move on the surrounding fields where they can still cause damage.
+
+As for how successful the prevention methods are overall– some wild boar seem to learn quickly about the location of the speaker and not to return there again. However, this is not always the case as some wild boar returned to the affected area, despite the scare-off measures. For a more precise and representative results, we would have to choose more speakers, more locations and a higher number wild boar. Additionally the time windows could also be extended, to see the wild boar movement behavior after more weeks or months.
+
+# 6 References
+
+Laube, P. (2014). Computational Movement Analysis. Wädenswil: Springer
+
+Laube, P. (2017). Representation, trajectories. The International Encyclopedia of Geography, 1–13
+
+Massei, G., Kindberg, J., Licoppe, A. et. al. (2015). Wild boar populations up, number of hunters down? A review of trends and implications for Europe. Pest Management Science 71-4 (15): 492-500
+
+Suter, S. & R. Eyholzer (2010): Interkantonales Wildschweinprojekt FR-BE-VD. WLS.ch, Fribourg
+
+Suter, S. Stoller, S. & Sigrist B (2018): Prevention of the damage to wild boar in agriculture and management of wild boar in protected areas, Wildlife Management Research Group WILMA, Institute for Environmental and Natural Resources, IUNR, Zurich University of Applied Sciences ZHAW
+
+
+
